@@ -1,0 +1,178 @@
+/*
+Passaggi:
+- Eseguire getValidOauthRedirectUrl() per la generazione dell'URI di reindirizzamento OAuth valido e seguire le istruzioni
+- Aggiungere allo script la libreria OAuth2 (https://github.com/gsuitedevs/apps-script-oauth2): 1B7FSrk5Zi6L1rSxxTDgDEUsPzlukDsi4KGuTMorsTQHhGBzBkMun4iDF
+- Eseguire fbAuth() per la richiesta di autorizzazioni al servizio. Copiare ed incollare l'URL in un nuovo tab nella barra degli indirizzi del browser. La funzione richiama poi authCallback dopodiché potrebbe comparire a video il messaggio 'Lo script è stato completato ma non ha restituito alcun valore' (che in ogni caso, anche se il titolo della pagina è 'Errore', è un messaggio positivo in quanto significa che l'operazione è stata completata). Verificare l'esito nel Log di Apps Script, se è true significa che l'autorizzazione è stata concessa.
+- Eseguire getFacebookData() per ottenere i dati da Facebook Business all'interno dello Spreadsheet incorporato
+
+- Per resettare il servizio di autenticazione di Facebook eseguire la funzione fbLogout()
+*/
+
+
+function getService_() {
+  return OAuth2.createService('Facebook')
+  .setAuthorizationBaseUrl('https://www.facebook.com/dialog/oauth')       // Set the endpoint URLs
+  .setTokenUrl('https://graph.facebook.com/v4.0/oauth/access_token')
+  .setClientId(CLIENT_ID)       // Set the client ID
+  .setClientSecret(CLIENT_SECRET)       // Set the secret
+  .setCallbackFunction('authCallback_')       // Set the name of the callback function that should be invoked to completem the OAuth flow
+  .setScope('ads_read manage_pages')       //Set Scope
+  .setPropertyStore(PropertiesService.getUserProperties());       // Set the property store where authorized tokens should be persisted
+}
+
+/* Generazione dell'URI di reindirizzamento OAuth valido  */
+/* Esempio di output visibile nel log: */
+/*
+Copy & Paste this URL:
+https://script.google.com/macros/d/10qEsY-berP_jolLNTlRWIEQ3QzDgcy12_1J6-y_RIAgfOyEbAYQiXzBb/usercallback
+In Valid OAuth Redirect URIs in:
+https://developers.facebook.com/apps/2630520726980056/fb-login/settings/
+*/
+function getValidOauthRedirectUrl() {
+  var validOauthUrl = Utilities.formatString('https://developers.facebook.com/apps/%s/fb-login/settings/', CLIENT_ID+'');
+  Logger.log('Copy & Paste this URL:\n' + Utilities.formatString("https://script.google.com/macros/d/%s/usercallback", ScriptApp.getScriptId()) + '\nIn Valid OAuth Redirect URIs field in:\n' + validOauthUrl);
+}
+
+/* Richiesta di autorizzazione per il collegamento al servizio di Facebook */
+/* Esempio di output visibile nel log se non è autorizzato (altrimenti sarà 'Authorized Successfully'): */
+/*
+Auth status: Not Authorized
+Copy & Paste this URL in a new tab of your browser address bar to Authorize: https://www.facebook.com/dialog/oauth?client_id=2630520726980056&response_type=code&redirect_uri=https%3A%2F%2Fscript.google.com%2Fmacros%2Fd%2F10qEsY-berP_jolLNTlRWIEQ3QzDgcy12_1J6-y_RIAgfOyEbAYQiXzBb%2Fusercallback&state=ADEpC8yVItB-Sa7IucCXtRJSQy4GGw0ClIHB3yMAG6eyttheSmMSYbFODQsC6i8sXY5CPLoO2b8jMH05-TdaM3AYI-31_Cozpssfrrb5RqiYYUsJUvTwxHEO7QSjojwpt1skF3hN5Ir090BhriMGNS9yWI_E2DkPLGGZoxpnsuhX7-gGpH8GoiSCvyRkQIz0U2MtG8-yHcgYw26L6PZVj-UaBe1QY5w4815BPEkvenoHx9UO5NAd1W_cZSLhefUNe4C981Dv9blf45d1AjNytORN560plhdOJq1VSe-VvN8bfqFuKA_sgGgc0xo0fGJatqmLfTYLCbFTMaxNBsQhiTyfhDOJnJfW3g&scope=ads_read%20manage_pages
+*/
+function fbAuth() {
+  var appCredentials = false;
+  if (CLIENT_ID+'' && CLIENT_SECRET+'') { 
+    appCredentials = true;
+    authURL = FB_SERVICE['fbService'].getAuthorizationUrl();
+    hasAccess = FB_SERVICE['fbService'].hasAccess();
+  }
+  if (appCredentials) {
+    var auth_res = 'Not Authorized';
+    if (hasAccess) {
+      auth_res = 'Authorized Successfully';
+      Logger.log(auth_res);
+      return;
+    }    
+    Logger.log('Auth status: ' + auth_res + '\nCopy & Paste this URL in a new tab of your browser address bar to Authorize: ' + authURL);
+  } else {
+    Logger.log('ERROR: App ID & App Secret cannot be blank.\nYou can find App Credentials here: https://developers.facebook.com/apps/');
+  }
+}
+
+// Questa funzione viene chiamata dopo aver eseguito l'URL per la richiesta di autorizzazioni fornito tramite da fbAuth()
+function authCallback_(request) {
+  var isAuth = getService_().handleCallback(request);
+  Logger.log(isAuth);
+}
+
+// Reset Facebook Service
+function fbLogout() {
+  var service = getService_();
+  service.reset();
+  Logger.log("Logout Success!")
+}
+
+// Recupera i dati da Facebook e li scrive nello Spreadsheet associato
+function getFbAdData_() {
+  var fbRequest = FB_SERVICE['fbService']; 
+  var requestEndpoint = "https://graph.facebook.com/v4.0/act_"+FB_AD_ACCOUNT_ID+"/insights?";
+  
+  var param = {'limit': FB_LIMIT,'level': FB_LEVEL};
+  param['fields'] = FB_FIELDS;
+  param['time_increment'] = '1';
+  param['date_preset'] = DATE_RANGE;
+  
+  
+  var response = UrlFetchApp.fetch(
+    requestEndpoint + jsonToQuerystring_(param), {
+    headers: { 'Authorization': 'Bearer ' + fbRequest.getAccessToken() },
+      muteHttpExceptions : true
+  })
+  
+  var parseResponse = JSON.parse(response);
+  if (parseResponse.hasOwnProperty('error')) {
+    if(parseResponse.error.hasOwnProperty('error_user_title')) {
+      Logger.log(parseResponse.error.error_user_title);
+    } else {
+      Logger.log(parseResponse.error.message);
+    }
+    return;
+  }
+  
+  try{
+    
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    // Verifico se il foglio non è vuoto prima di pulirlo, altrimenti se fosse vuoto in partenza si genererebbe un'eccezione
+    if(sheet.getLastRow() > 0 && sheet.getLastColumn() > 0) {
+      sheet.getRange(1,1,sheet.getLastRow(),sheet.getLastColumn()).clear();
+    }
+    
+    var fbOutput = [];
+    
+    if(parseResponse.data.length > 0 ) {
+      fbOutput = generateArrayData_(parseResponse,SOURCE,MEDIUM);
+    } else {
+      fbOutput.push([]);
+    }
+    
+    if (fbOutput[0].length > 0) {
+      sheet.getRange(2, 1, fbOutput.length, fbOutput[0].length).setValues(fbOutput);
+      sheet.getRange(1, 1, 1, GA_SCHEMA.length).setValues([GA_SCHEMA]);
+    }
+    
+    return "\nDATE RANGE: "+DATE_RANGE+"\nFB AD ACCOUNT ID: "+FB_AD_ACCOUNT_ID+"\nTOTAL ROWS: "+fbOutput.length;
+    
+  } catch (e) { return e; }
+  
+};
+
+// Funzione di avvio della procedura di recupero dati da Facebook Ads
+function getFacebookData() {
+  if (DATE_RANGE == "") { Logger.log('Enter Correct Date Range!'); return; }
+  if (FB_FIELDS == "") { Logger.log('Enter the Facebook Fields'); return; }
+  if(FB_ACCOUNT_TYPE === "adInsights") {
+    var result = getFbAdData_();
+    Logger.log(result);
+  }
+}
+
+// --------------------------------------------------
+// Funzioni di supporto e parsing dei dati - START
+
+// Converte i parametri json in querystring per essere appesi all'URL di richiesta di autorizzazione al servizio di Facebook, es:
+// json: {level=adset, date_preset=last_month, limit=1000.0, fields=[date_start,clicks,spend,impressions,adset_name,campaign_name], time_increment=1}
+// querystring: limit=1000&level=adset&fields=date_start,clicks,spend,impressions,adset_name,campaign_name&time_increment=1&date_preset=last_month
+function jsonToQuerystring_(param) {
+  var str = "";
+  for (var key in param) {
+    if (str != "") {
+      str += "&";
+    }
+    str += key + "=" + param[key];
+  }
+  return str;
+}
+
+// Dalla risposta ottenuta dal servizio Facebook genera l'array per poter essere scritto sullo Spreadsheet nel formato adatto all'importazione in Google Analytics
+function generateArrayData_(parseResponse, SOURCE, MEDIUM) {
+  var Data=parseResponse;  
+  var arr_res=[];
+  for (var i = 0; i < Data.data.length; i++) {
+    arr_res[i]=[];
+    var p = {};
+    for (key in Data.data[i]) {
+      if (key == 'campaign_name') { arr_res[i].push(Data.data[i][key].replace(/\,|\'|\"/g,'')); continue; } // essendo un testo effettua l'escape di eventuali back slash, apostrofi o virgolette
+      if (key == 'adset_name') { arr_res[i].push(Data.data[i][key].replace(/\,|\'|\"/g,'')); continue; } // essendo un testo effettua l'escape di eventuali back slash, apostrofi o virgolette
+      if(key=='date_stop') { continue; } // per evitare che venga inserita la colonna di data di fine (che, seppur in formato non corretto, es: 2019-09-01 anziché 20190901, corrispondente a quella di inizio dato che il dettaglio è giornaliero) 
+      if(key=='date_start') { arr_res[i].push(Data.data[i][key].toString().split('-').join('')); continue; } // converte la data da 2019-09-01 a 20190901
+      arr_res[i].push(Data.data[i][key]); // per tutte le altre info numeriche
+    }
+    // Inserisce mezzo e sorgente nella seconda e terza colonna, in modo da rispettare l'ordine del dell'intestazione dello schema
+    arr_res[i].splice(1, 0, SOURCE);
+    arr_res[i].splice(1, 0, MEDIUM);
+  } 
+  return arr_res;
+}
+
+// Funzioni di supporto e parsing dei dati - END
+// --------------------------------------------------
